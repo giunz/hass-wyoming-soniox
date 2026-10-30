@@ -4,11 +4,11 @@ import asyncio
 import json
 import logging
 import re
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, Callable, List, Optional
 
 import aiohttp
 
-from .const import STT_CHANNELS, STT_RATE, Settings
+from .const import STT_CHANNELS, STT_RATE, STT_WIDTH, Settings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,22 +36,58 @@ class SttSession:
     """
 
     def __init__(
-        self, http: aiohttp.ClientSession, settings: Settings, language: Optional[str]
+        self,
+        http: aiohttp.ClientSession,
+        settings: Settings,
+        language: Optional[str],
+        on_done: Optional[Callable[[], None]] = None,
     ) -> None:
         self._http = http
         self._settings = settings
+        self._on_done = on_done
         self._queue: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
         self._final_text: List[str] = []
         self._hints = _language_hints(language, settings.language_hints)
-        self._task = asyncio.create_task(self._run())
+        # Audio is capped so a client that never stops sending cannot fill
+        # memory. Whole 16-bit samples only.
+        self._max_bytes = int(settings.stt_max_seconds * STT_RATE * STT_WIDTH * STT_CHANNELS) & ~1
+        self._queued_bytes = 0
+        self._cap_logged = False
+        # A session that never gets audio-stop is closed after this long.
+        self._deadline = (
+            settings.stt_max_seconds + settings.stt_finish_timeout + settings.stt_idle_slack
+        )
+        self._task = asyncio.create_task(self._run_with_deadline())
+        self._task.add_done_callback(self._finished)
 
     @property
     def language_hints(self) -> List[str]:
         return self._hints
 
     def send_audio(self, pcm: bytes) -> None:
-        if pcm:
-            self._queue.put_nowait(pcm)
+        if not pcm or self._task.done():
+            # Nothing is reading the queue any more (Soniox closed the stream
+            # or the session timed out), so do not keep audio in memory.
+            return
+        room = self._max_bytes - self._queued_bytes
+        if len(pcm) > room:
+            if not self._cap_logged:
+                self._cap_logged = True
+                _LOGGER.warning(
+                    "More than %.0f seconds of audio in one request; ignoring the rest",
+                    self._settings.stt_max_seconds,
+                )
+            pcm = pcm[: max(room, 0) & ~1]
+            if not pcm:
+                return
+        self._queued_bytes += len(pcm)
+        self._queue.put_nowait(pcm)
+
+    def _finished(self, task: "asyncio.Task[None]") -> None:
+        if not task.cancelled() and task.exception() is not None:
+            _LOGGER.debug("STT session ended with: %s", task.exception())
+        if self._on_done is not None:
+            self._on_done()
 
     async def finish(self) -> str:
         """Signal end of audio and wait for the final transcript."""
@@ -69,6 +105,13 @@ class SttSession:
             await self._task
         except BaseException:  # noqa: BLE001 - closing down, errors are moot
             pass
+
+    async def _run_with_deadline(self) -> None:
+        try:
+            async with asyncio.timeout(self._deadline):
+                await self._run()
+        except TimeoutError:
+            raise SonioxError("Speech-to-text session timed out") from None
 
     async def _run(self) -> None:
         config = {

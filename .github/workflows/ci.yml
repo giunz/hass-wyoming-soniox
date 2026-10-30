@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -54,6 +57,29 @@ jobs:
           docker run -d --name soniox --entrypoint python3 -p 10500:10500 \
             -e SONIOX_API_KEY=dummy soniox-test:amd64 \
             -m wyoming_soniox --uri tcp://0.0.0.0:10500
+          for i in $(seq 1 30); do
+            if echo '{ "type": "describe" }' | nc -w 1 localhost 10500 | grep -q Soniox; then
+              echo "Bridge answered describe"; exit 0
+            fi
+            sleep 1
+          done
+          docker logs soniox; exit 1
+
+  build-standalone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -f Dockerfile.standalone -t soniox-standalone soniox
+      - name: Does not run as root
+        run: |
+          uid=$(docker run --rm --entrypoint id soniox-standalone -u)
+          echo "uid=$uid"
+          [ "$uid" != 0 ]
+      - name: Smoke test
+        run: |
+          docker run -d --name soniox -p 127.0.0.1:10500:10500 \
+            -e SONIOX_API_KEY=dummy soniox-standalone
           for i in $(seq 1 30); do
             if echo '{ "type": "describe" }' | nc -w 1 localhost 10500 | grep -q Soniox; then
               echo "Bridge answered describe"; exit 0

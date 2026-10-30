@@ -20,7 +20,14 @@ from wyoming.info import (
 from wyoming.server import AsyncServer
 
 from . import __version__
-from .const import FALLBACK_VOICES, LANGUAGES, REGION_DOMAINS, TTS_SAMPLE_RATES, Settings
+from .const import (
+    FALLBACK_VOICES,
+    LANGUAGES,
+    REGION_DOMAINS,
+    TTS_SAMPLE_RATES,
+    Limits,
+    Settings,
+)
 from .handler import SonioxEventHandler
 from .soniox_api import fetch_voices
 
@@ -49,6 +56,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--voices", type=_csv, default=None, help="Only advertise these voices")
     parser.add_argument("--no-stt", action="store_true", help="Disable speech-to-text")
     parser.add_argument("--no-tts", action="store_true", help="Disable text-to-speech")
+    parser.add_argument("--stt-max-seconds", type=float, default=60.0, help="Audio accepted per speech-to-text request (default 60)")
+    parser.add_argument("--max-stt-sessions", type=int, default=4, help="Simultaneous speech-to-text requests (default 4)")
+    parser.add_argument("--max-tts-requests", type=int, default=4, help="Simultaneous requests to Soniox text-to-speech (default 4)")
+    parser.add_argument("--tts-max-chars", type=int, default=8000, help="Characters spoken per message; the rest is dropped (default 8000)")
     parser.add_argument("--stt-url", help=argparse.SUPPRESS)
     parser.add_argument("--tts-url", help=argparse.SUPPRESS)
     parser.add_argument("--api-url", help=argparse.SUPPRESS)
@@ -61,6 +72,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         parser.error("A Soniox API key is required (--api-key or SONIOX_API_KEY)")
     if not 0.7 <= args.tts_speed <= 1.3:
         parser.error("--tts-speed must be between 0.7 and 1.3")
+    if not 1 <= args.stt_max_seconds <= 300:
+        parser.error("--stt-max-seconds must be between 1 and 300")
+    if args.max_stt_sessions < 1 or args.max_tts_requests < 1:
+        parser.error("--max-stt-sessions and --max-tts-requests must be at least 1")
+    if args.tts_max_chars < 1:
+        parser.error("--tts-max-chars must be at least 1")
     if args.no_stt and args.no_tts:
         parser.error("Both speech-to-text and text-to-speech are disabled")
     return args
@@ -147,22 +164,10 @@ async def main(argv=None) -> None:
     if not args.debug:
         logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
-    settings = Settings(
-        api_key=args.api_key,
-        region=args.region,
-        stt_model=args.stt_model,
-        tts_model=args.tts_model,
-        voice=args.voice,
-        language_hints=args.language_hints,
-        tts_default_language=args.tts_default_language,
-        tts_sample_rate=args.tts_sample_rate,
-        tts_speed=args.tts_speed,
-        stt_enabled=not args.no_stt,
-        tts_enabled=not args.no_tts,
-        stt_url=args.stt_url,
-        tts_url=args.tts_url,
-        api_url=args.api_url,
-    )
+    try:
+        settings = _make_settings(args)
+    except ValueError as err:
+        sys.exit(f"error: {err}")
 
     async with aiohttp.ClientSession() as http:
         info = await build_info(settings, http, args.voices)
@@ -175,7 +180,30 @@ async def main(argv=None) -> None:
             "on" if settings.tts_enabled else "off",
         )
         server = AsyncServer.from_uri(args.uri)
-        await server.run(partial(SonioxEventHandler, info, settings, http))
+        await server.run(partial(SonioxEventHandler, info, settings, http, Limits(settings)))
+
+
+def _make_settings(args: argparse.Namespace) -> Settings:
+    return Settings(
+        api_key=args.api_key,
+        region=args.region,
+        stt_model=args.stt_model,
+        tts_model=args.tts_model,
+        voice=args.voice,
+        language_hints=args.language_hints,
+        tts_default_language=args.tts_default_language,
+        tts_sample_rate=args.tts_sample_rate,
+        tts_speed=args.tts_speed,
+        stt_enabled=not args.no_stt,
+        tts_enabled=not args.no_tts,
+        stt_max_seconds=args.stt_max_seconds,
+        max_stt_sessions=args.max_stt_sessions,
+        max_tts_requests=args.max_tts_requests,
+        tts_max_chars=args.tts_max_chars,
+        stt_url=args.stt_url,
+        tts_url=args.tts_url,
+        api_url=args.api_url,
+    )
 
 
 def run() -> None:

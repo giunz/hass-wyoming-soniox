@@ -1,5 +1,6 @@
 """Wyoming event handler: one instance per connection from Home Assistant."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -18,7 +19,7 @@ from wyoming.tts import (
     SynthesizeStopped,
 )
 
-from .const import STT_CHANNELS, STT_RATE, STT_WIDTH, Settings
+from .const import STT_CHANNELS, STT_RATE, STT_WIDTH, Limits, Settings
 from .soniox_api import SonioxError, SttSession, synthesize
 from .text import (
     chunk_text,
@@ -29,6 +30,9 @@ from .text import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Longest one sentence may hold a Soniox request slot, in seconds.
+TTS_SLOT_SECONDS = 120
+
 
 class SonioxEventHandler(AsyncEventHandler):
     """Handle speech-to-text and text-to-speech requests."""
@@ -38,6 +42,7 @@ class SonioxEventHandler(AsyncEventHandler):
         wyoming_info: Info,
         settings: Settings,
         http: aiohttp.ClientSession,
+        limits: Limits,
         *args,
         **kwargs,
     ) -> None:
@@ -45,6 +50,7 @@ class SonioxEventHandler(AsyncEventHandler):
         self._info_event = wyoming_info.event()
         self._settings = settings
         self._http = http
+        self._limits = limits
 
         # Speech-to-text state
         self._stt: Optional[SttSession] = None
@@ -58,6 +64,8 @@ class SonioxEventHandler(AsyncEventHandler):
         self._stream_buffer = ""
         self._stream_voice: Optional[str] = None
         self._stream_language: Optional[str] = None
+        self._stream_chars = 0
+        self._stream_cap_logged = False
         self._audio_started = False
 
     async def handle_event(self, event: Event) -> bool:
@@ -69,15 +77,14 @@ class SonioxEventHandler(AsyncEventHandler):
             if Transcribe.is_type(event.type):
                 transcribe = Transcribe.from_event(event)
                 self._stt_language = transcribe.language
-                await self._start_stt()
-                return True
+                return await self._start_stt()
             if AudioStart.is_type(event.type):
                 if self._stt is None:
-                    await self._start_stt()
+                    return await self._start_stt()
                 return True
             if AudioChunk.is_type(event.type):
-                if self._stt is None:
-                    await self._start_stt()
+                if self._stt is None and not await self._start_stt():
+                    return False
                 chunk = self._converter.convert(AudioChunk.from_event(event))
                 self._stt.send_audio(chunk.audio)
                 return True
@@ -90,6 +97,8 @@ class SonioxEventHandler(AsyncEventHandler):
                 start = SynthesizeStart.from_event(event)
                 self._streaming = True
                 self._stream_buffer = ""
+                self._stream_chars = 0
+                self._stream_cap_logged = False
                 self._audio_started = False
                 self._stream_voice = start.voice.name if start.voice else None
                 self._stream_language = start.voice.language if start.voice else None
@@ -97,7 +106,18 @@ class SonioxEventHandler(AsyncEventHandler):
             if SynthesizeChunk.is_type(event.type):
                 if not self._streaming:
                     return True
-                self._stream_buffer += SynthesizeChunk.from_event(event).text
+                piece = SynthesizeChunk.from_event(event).text
+                room = self._settings.tts_max_chars - self._stream_chars
+                if len(piece) > room:
+                    if not self._stream_cap_logged:
+                        self._stream_cap_logged = True
+                        _LOGGER.warning(
+                            "Message longer than %d characters; ignoring the rest",
+                            self._settings.tts_max_chars,
+                        )
+                    piece = piece[: max(room, 0)]
+                self._stream_chars += len(piece)
+                self._stream_buffer += piece
                 sentences, self._stream_buffer = split_complete_sentences(
                     self._stream_buffer
                 )
@@ -139,14 +159,28 @@ class SonioxEventHandler(AsyncEventHandler):
     # ------------------------------------------------------------------
     # Speech-to-text
 
-    async def _start_stt(self) -> None:
+    async def _start_stt(self) -> bool:
+        """Open a speech-to-text session; False (after an error event) if busy."""
         if self._stt is not None:
             await self._stt.cancel()
+            self._stt = None
+        if not self._limits.acquire_stt():
+            _LOGGER.warning("Too many simultaneous speech-to-text requests; refusing one")
+            await self.write_event(
+                Error(text="Too many simultaneous requests", code="busy").event()
+            )
+            return False
         self._converter = AudioChunkConverter(
             rate=STT_RATE, width=STT_WIDTH, channels=STT_CHANNELS
         )
-        self._stt = SttSession(self._http, self._settings, self._stt_language)
+        self._stt = SttSession(
+            self._http,
+            self._settings,
+            self._stt_language,
+            on_done=self._limits.release_stt,
+        )
         _LOGGER.debug("STT started, language hints %s", self._stt.language_hints)
+        return True
 
     async def _finish_stt(self) -> None:
         if self._stt is None:
@@ -175,9 +209,16 @@ class SonioxEventHandler(AsyncEventHandler):
         voice = request.voice.name if request.voice else None
         language = request.voice.language if request.voice else None
         self._audio_started = False
+        text = request.text
+        if len(text) > self._settings.tts_max_chars:
+            _LOGGER.warning(
+                "Message longer than %d characters; ignoring the rest",
+                self._settings.tts_max_chars,
+            )
+            text = text[: self._settings.tts_max_chars]
         # Clean before chunking: list markers are only recognisable at the
         # start of a line, and chunking joins lines.
-        for piece in chunk_text(clean_for_speech(request.text)):
+        for piece in chunk_text(clean_for_speech(text)):
             if not await self._speak(piece, voice, language):
                 return False
         if not self._audio_started:
@@ -200,22 +241,26 @@ class SonioxEventHandler(AsyncEventHandler):
         )
         _LOGGER.debug("TTS %s/%s: %s", voice, language, text)
         try:
-            async for pcm in synthesize(
-                self._http, self._settings, text, voice, language
-            ):
-                if not self._audio_started:
-                    await self._write_audio_start()
-                await self.write_event(
-                    AudioChunk(
-                        rate=self._settings.tts_sample_rate,
-                        width=2,
-                        channels=1,
-                        audio=pcm,
-                    ).event()
-                )
-        except SonioxError as err:
-            _LOGGER.error("Text-to-speech failed: %s", err)
-            await self.write_event(Error(text=str(err), code="soniox-tts").event())
+            # At most a few requests to Soniox at a time. The time limit also
+            # frees the slot if the client stops reading the audio.
+            async with self._limits.tts, asyncio.timeout(TTS_SLOT_SECONDS):
+                async for pcm in synthesize(
+                    self._http, self._settings, text, voice, language
+                ):
+                    if not self._audio_started:
+                        await self._write_audio_start()
+                    await self.write_event(
+                        AudioChunk(
+                            rate=self._settings.tts_sample_rate,
+                            width=2,
+                            channels=1,
+                            audio=pcm,
+                        ).event()
+                    )
+        except (SonioxError, TimeoutError) as err:
+            message = str(err) or "Text-to-speech timed out"
+            _LOGGER.error("Text-to-speech failed: %s", message)
+            await self.write_event(Error(text=message, code="soniox-tts").event())
             return False
         return True
 

@@ -29,6 +29,12 @@ docker compose up -d
 Then add the *Wyoming Protocol* integration in Home Assistant with the host's
 IP and port `10500`.
 
+The Wyoming protocol has no login, so anyone who can reach the port can use
+your Soniox account. By default the compose file publishes the port on
+`127.0.0.1` only (this machine). If Home Assistant runs on another machine,
+start it with `BIND_ADDRESS=<this machine's LAN IP> docker compose up -d`,
+and do not expose the port to the internet or to untrusted networks.
+
 ## Run directly
 
 ```sh
@@ -50,6 +56,16 @@ SONIOX_API_KEY=... python -m wyoming_soniox --uri tcp://0.0.0.0:10500 --region e
 
 Home Assistant's TTS client sends a voice name but no language, so the bridge
 picks Greek for text in Greek letters and the configured default otherwise.
+
+## Security notes
+
+- The Soniox API key is passed in an environment variable (or `--api-key-file`)
+  and is never logged. `--api-key` works too but shows in the process list.
+- Connections to Soniox must be encrypted (`wss://`, `https://`); plain
+  `ws://` and `http://` are accepted only for `localhost`, for tests.
+- Limits per request: `--stt-max-seconds` (60), `--max-stt-sessions` (4),
+  `--max-tts-requests` (4), `--tts-max-chars` (8000).
+- The Docker image runs as a non-root user.
 
 ## Tests
 

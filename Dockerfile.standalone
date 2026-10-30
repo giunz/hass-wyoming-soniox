@@ -2,10 +2,16 @@
 #   docker build -f Dockerfile.standalone -t wyoming-soniox soniox
 FROM python:3.13-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
 WORKDIR /app
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && useradd --system --no-create-home --uid 10001 soniox
 COPY wyoming_soniox ./wyoming_soniox
+
+# The bridge needs no special rights, so it does not run as root.
+USER soniox
 
 EXPOSE 10500
 ENTRYPOINT ["python", "-m", "wyoming_soniox", "--uri", "tcp://0.0.0.0:10500"]

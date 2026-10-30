@@ -336,3 +336,168 @@ async def test_synthesize_total_timeout_becomes_soniox_error(monkeypatch):
                     pass
     finally:
         await runner.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Limits (the bridge has no login, so these protect memory and the account)
+
+
+async def _stop(proc) -> str:
+    proc.terminate()
+    return (await proc.communicate())[0].decode()
+
+
+def _rss_mb(pid: int) -> float:
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith("VmRSS"):
+            return int(line.split()[1]) / 1024
+    raise RuntimeError("no VmRSS")
+
+
+@pytest.mark.asyncio
+async def test_stt_audio_is_capped(mock):
+    proc, port = await _start_bridge(mock, GOOD_KEY, "--stt-max-seconds", "1")
+    try:
+        result = await _transcribe(port, "en", _tone(16000, 3.0))
+    finally:
+        out = await _stop(proc)
+    assert result.text == "Turn on the kitchen light."
+    assert mock.stt_sessions[-1]["audio_bytes"] == 32000  # exactly 1 second
+    assert "ignoring the rest" in out
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="needs /proc")
+@pytest.mark.asyncio
+async def test_endless_audio_does_not_grow_memory(mock):
+    """Soniox rejects the key, then the client keeps streaming audio."""
+    proc, port = await _start_bridge(mock, "wrong-key")
+    try:
+        chunk = AudioChunk(rate=16000, width=2, channels=1, audio=b"\0" * 64000).event()
+        async with AsyncTcpClient("127.0.0.1", port) as client:
+            await client.write_event(Transcribe(language="en").event())
+            await client.write_event(AudioStart(rate=16000, width=2, channels=1).event())
+            await asyncio.sleep(1)  # upstream has closed by now
+            before = _rss_mb(proc.pid)
+            for _ in range(500):  # 32 MB
+                await client.write_event(chunk)
+            await asyncio.sleep(1)
+            grown = _rss_mb(proc.pid) - before
+    finally:
+        await _stop(proc)
+    assert grown < 12, f"memory grew by {grown:.0f} MB"
+
+
+@pytest.mark.asyncio
+async def test_stt_session_limit(mock):
+    proc, port = await _start_bridge(mock, GOOD_KEY, "--max-stt-sessions", "2")
+    clients = []
+    try:
+        for _ in range(2):
+            client = AsyncTcpClient("127.0.0.1", port)
+            await client.connect()
+            await client.write_event(Transcribe(language="en").event())
+            clients.append(client)
+            await asyncio.sleep(0.2)
+
+        extra = AsyncTcpClient("127.0.0.1", port)
+        await extra.connect()
+        await extra.write_event(Transcribe(language="en").event())
+        event = await asyncio.wait_for(extra.read_event(), 5)
+        assert Error.is_type(event.type) and Error.from_event(event).code == "busy"
+        assert await asyncio.wait_for(extra.read_event(), 5) is None  # connection closed
+        await extra.disconnect()
+        assert len(mock.stt_sessions) == 2
+
+        # A slot comes back when a session ends.
+        await clients.pop().disconnect()
+        await asyncio.sleep(0.3)
+        result = await _transcribe(port, "en", _tone(16000, 0.3))
+        assert result.text == "Turn on the kitchen light."
+    finally:
+        for client in clients:
+            await client.disconnect()
+        await _stop(proc)
+
+
+@pytest.mark.asyncio
+async def test_stt_session_without_audio_stop_is_closed(mock):
+    import aiohttp
+
+    from wyoming_soniox.const import Settings
+    from wyoming_soniox.soniox_api import SttSession
+
+    settings = Settings(
+        api_key=GOOD_KEY,
+        stt_url=f"ws://127.0.0.1:{mock.port}/transcribe-websocket",
+        stt_max_seconds=1,
+        stt_finish_timeout=0.1,
+        stt_idle_slack=0,
+    )
+    done = asyncio.Event()
+    async with aiohttp.ClientSession() as http:
+        session = SttSession(http, settings, "en", on_done=done.set)
+        session.send_audio(b"\0" * 3200)
+        await asyncio.wait_for(done.wait(), 5)  # closed after about 1.1 s
+
+
+@pytest.mark.asyncio
+async def test_tts_text_is_capped(mock):
+    proc, port = await _start_bridge(mock, GOOD_KEY, "--tts-max-chars", "40")
+    try:
+        text = " ".join(f"Sentence number {i}." for i in range(30))
+        async with AsyncTcpClient("127.0.0.1", port) as client:
+            await client.write_event(Synthesize(text=text).event())
+            await _read_until(client, "audio-stop")
+        full_spoken = sum(len(r["text"]) for r in mock.tts_requests)
+        mock.tts_requests.clear()
+
+        # Same limit when Home Assistant streams the text in pieces.
+        pieces = ["Alpha beta gamma. "] * 6
+        async with AsyncTcpClient("127.0.0.1", port) as client:
+            await client.write_event(SynthesizeStart().event())
+            for piece in pieces:
+                await client.write_event(SynthesizeChunk(text=piece).event())
+            await client.write_event(Synthesize(text="".join(pieces)).event())
+            await client.write_event(SynthesizeStop().event())
+            await _read_until(client, "synthesize-stopped")
+        streamed_spoken = sum(len(r["text"]) for r in mock.tts_requests)
+    finally:
+        out = await _stop(proc)
+    assert 0 < full_spoken <= 40
+    assert 0 < streamed_spoken <= 40
+    assert "ignoring the rest" in out
+
+
+@pytest.mark.asyncio
+async def test_tts_requests_are_limited(mock):
+    mock.tts_delay = 0.3
+    proc, port = await _start_bridge(mock, GOOD_KEY, "--max-tts-requests", "1")
+
+    async def speak(n):
+        async with AsyncTcpClient("127.0.0.1", port) as client:
+            await client.write_event(Synthesize(text=f"Message {n}.").event())
+            await _read_until(client, "audio-stop")
+
+    try:
+        await asyncio.gather(*(speak(n) for n in range(3)))
+    finally:
+        await _stop(proc)
+    assert len(mock.tts_requests) == 3  # all were served
+    assert mock.tts_max_active == 1  # but one at a time
+
+
+@pytest.mark.asyncio
+async def test_unencrypted_soniox_url_is_refused(mock):
+    """An http:// URL to a real host would send the API key in clear text."""
+    port = _free_port()
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "wyoming_soniox",
+        "--uri", f"tcp://127.0.0.1:{port}", "--api-key", "secret-key-123",
+        "--tts-url", "http://example.com/tts",
+        env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out = (await asyncio.wait_for(proc.communicate(), 10))[0].decode()
+    assert proc.returncode != 0
+    assert "must start with https://" in out
+    assert "secret-key-123" not in out

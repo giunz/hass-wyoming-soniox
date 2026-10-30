@@ -42,6 +42,18 @@ stored and are never used for training; logs contain only metadata. With the
 EU region, audio and text stay in the EU. This app does not store anything.
 **Debug logging** writes your words to the app log, so leave it off normally.
 
+## Security
+
+The Wyoming protocol has no login, so anyone who can connect to port 10500
+can use your Soniox account. The app does not publish that port outside Home
+Assistant, which is the safe default: leave the port field empty in the app's
+network settings unless you need it, and never expose it to the internet.
+
+To protect memory and your account from a client that misbehaves, the app
+accepts at most 60 seconds of audio per request, 4 simultaneous
+speech-to-text requests, 4 simultaneous text-to-speech requests, and 8000
+characters of text per spoken message. Extra requests get a "busy" error.
+
 ## Cost
 
 Soniox lists speech-to-text at about $0.12 per hour of audio and

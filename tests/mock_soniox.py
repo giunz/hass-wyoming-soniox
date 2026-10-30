@@ -14,6 +14,9 @@ class MockSoniox:
     def __init__(self) -> None:
         self.stt_sessions = []  # dicts: headers, config, audio_bytes, ended_with_empty_text
         self.tts_requests = []
+        self.tts_delay = 0.0  # seconds each TTS request takes
+        self.tts_active = 0
+        self.tts_max_active = 0  # most TTS requests seen at the same time
         self.app = web.Application()
         self.app.router.add_get("/transcribe-websocket", self.stt)
         self.app.router.add_post("/tts", self.tts)
@@ -116,11 +119,18 @@ class MockSoniox:
         )
         resp = web.StreamResponse(headers={"Content-Type": "audio/pcm"})
         await resp.prepare(request)
-        # Odd-sized pieces, so the bridge must re-align 16-bit samples.
-        for i in range(0, len(pcm), 1001):
-            await resp.write(pcm[i:i + 1001])
-            await asyncio.sleep(0)
-        await resp.write_eof()
+        self.tts_active += 1
+        self.tts_max_active = max(self.tts_max_active, self.tts_active)
+        try:
+            if self.tts_delay:
+                await asyncio.sleep(self.tts_delay)
+            # Odd-sized pieces, so the bridge must re-align 16-bit samples.
+            for i in range(0, len(pcm), 1001):
+                await resp.write(pcm[i:i + 1001])
+                await asyncio.sleep(0)
+            await resp.write_eof()
+        finally:
+            self.tts_active -= 1
         return resp
 
     async def models(self, request: web.Request) -> web.Response:

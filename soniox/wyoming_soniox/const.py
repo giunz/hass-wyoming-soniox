@@ -1,7 +1,9 @@
 """Constants: regional endpoints, languages, defaults."""
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import List, Optional
+from urllib.parse import urlsplit
 
 # Regional API domains, from https://soniox.com/docs/data-residency
 REGION_DOMAINS = {
@@ -36,6 +38,22 @@ STT_WIDTH = 2
 STT_CHANNELS = 1
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _require_tls(name: str, url: str, secure: str, insecure: str) -> None:
+    """Allow only encrypted URLs; the unencrypted scheme only for this machine."""
+    parts = urlsplit(url)
+    if parts.scheme == secure:
+        return
+    if parts.scheme == insecure and parts.hostname in _LOOPBACK_HOSTS:
+        return
+    raise ValueError(
+        f"The {name} URL must start with {secure}:// "
+        f"({insecure}:// is only allowed for localhost): {url}"
+    )
+
+
 @dataclass
 class Settings:
     """Runtime settings for the bridge."""
@@ -52,6 +70,13 @@ class Settings:
     stt_enabled: bool = True
     tts_enabled: bool = True
     stt_finish_timeout: float = 10.0
+    # Limits. The bridge has no login (the Wyoming protocol has none), so these
+    # keep one misbehaving client from using up memory or the Soniox account.
+    stt_max_seconds: float = 60.0  # audio accepted per utterance
+    max_stt_sessions: int = 4  # simultaneous speech-to-text sessions
+    max_tts_requests: int = 4  # simultaneous requests to Soniox TTS
+    tts_max_chars: int = 8000  # text spoken per message; the rest is dropped
+    stt_idle_slack: float = 10.0  # extra seconds before an unfinished session is closed
     # Endpoint overrides (normally derived from region; used for tests).
     stt_url: Optional[str] = None
     tts_url: Optional[str] = None
@@ -65,7 +90,30 @@ class Settings:
             self.tts_url = f"https://tts-rt.{domain}/tts"
         if self.api_url is None:
             self.api_url = f"https://api.{domain}"
+        # The API key is sent to these URLs, so they must be encrypted.
+        _require_tls("STT", self.stt_url, "wss", "ws")
+        _require_tls("TTS", self.tts_url, "https", "http")
+        _require_tls("API", self.api_url, "https", "http")
 
     @property
     def auth_headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}"}
+
+
+class Limits:
+    """Counters shared by all connections (one instance per server)."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._max_stt = settings.max_stt_sessions
+        self._stt_active = 0
+        self.tts = asyncio.Semaphore(settings.max_tts_requests)
+
+    def acquire_stt(self) -> bool:
+        """Take a speech-to-text slot; False if all slots are in use."""
+        if self._stt_active >= self._max_stt:
+            return False
+        self._stt_active += 1
+        return True
+
+    def release_stt(self) -> None:
+        self._stt_active = max(0, self._stt_active - 1)

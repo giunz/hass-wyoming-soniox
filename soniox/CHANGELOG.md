@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3
+
+Security hardening.
+
+- Limits so one client cannot use up memory or the Soniox account: 60 seconds
+  of audio per speech-to-text request, 4 simultaneous speech-to-text sessions
+  (extra ones get a "busy" error), 4 simultaneous text-to-speech requests and
+  8000 characters per spoken message. Audio is no longer kept in memory after
+  Soniox has closed the stream. A session that never ends is closed.
+- Connections to Soniox must be encrypted; `http://` and `ws://` are accepted
+  only for localhost.
+- The compose file publishes the port on 127.0.0.1 by default (`BIND_ADDRESS`
+  changes it). The standalone Docker image runs as a non-root user.
+- CI uses read-only permissions and also builds the standalone image.
+
 ## 0.1.2
 
 - The app does not start when the API key is empty; it logs an error and stops.

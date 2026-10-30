@@ -5,7 +5,12 @@ services:
       dockerfile: ../Dockerfile.standalone
     restart: unless-stopped
     ports:
-      - "10500:10500"
+      # The Wyoming protocol has no login, so anyone who can reach this port
+      # can use your Soniox account. By default it is reachable only from this
+      # machine. To let Home Assistant on another machine connect, set
+      # BIND_ADDRESS to this machine's LAN address (not 0.0.0.0) and keep the
+      # port closed to the internet and to untrusted networks.
+      - "${BIND_ADDRESS:-127.0.0.1}:10500:10500"
     environment:
       SONIOX_API_KEY: ${SONIOX_API_KEY}
       SONIOX_REGION: eu
