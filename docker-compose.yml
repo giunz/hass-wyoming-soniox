@@ -1,0 +1,12 @@
+services:
+  wyoming-soniox:
+    build:
+      context: ./soniox
+      dockerfile: ../Dockerfile.standalone
+    restart: unless-stopped
+    ports:
+      - "10500:10500"
+    environment:
+      SONIOX_API_KEY: ${SONIOX_API_KEY}
+      SONIOX_REGION: eu
+    command: ["--language-hints", "en,el", "--voice", "Adrian"]

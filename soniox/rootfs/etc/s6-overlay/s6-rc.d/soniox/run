@@ -1,0 +1,37 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Start the Soniox Wyoming bridge
+# ==============================================================================
+flags=()
+
+if ! bashio::config.has_value 'api_key'; then
+    bashio::exit.nok "Set your Soniox API key in the app configuration first."
+fi
+
+if bashio::config.false 'enable_stt'; then
+    flags+=('--no-stt')
+fi
+
+if bashio::config.false 'enable_tts'; then
+    flags+=('--no-tts')
+fi
+
+if bashio::config.true 'debug_logging'; then
+    flags+=('--debug')
+fi
+
+# The key goes through the environment, not the command line, so it does not
+# show up in the process list.
+export SONIOX_API_KEY
+SONIOX_API_KEY="$(bashio::config 'api_key')"
+
+# shellcheck disable=SC2068
+exec python3 -m wyoming_soniox \
+    --uri 'tcp://0.0.0.0:10500' \
+    --region "$(bashio::config 'region')" \
+    --language-hints "$(bashio::config 'language_hints')" \
+    --voice "$(bashio::config 'voice')" \
+    --tts-default-language "$(bashio::config 'tts_default_language')" \
+    --tts-speed "$(bashio::config 'tts_speed')" \
+    --tts-sample-rate "$(bashio::config 'tts_sample_rate')" ${flags[@]}

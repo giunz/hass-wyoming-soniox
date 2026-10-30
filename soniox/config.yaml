@@ -1,0 +1,36 @@
+---
+version: 0.1.1
+slug: soniox_speech
+name: Soniox Speech
+description: Cloud speech-to-text and text-to-speech from Soniox for Assist
+url: https://github.com/giunz/hass-wyoming-soniox
+arch:
+  - amd64
+  - aarch64
+init: false
+discovery:
+  - wyoming
+ports:
+  "10500/tcp": null
+options:
+  api_key: ""
+  region: eu
+  language_hints: "en,el"
+  voice: Adrian
+  tts_default_language: en
+  tts_speed: 1.0
+  tts_sample_rate: 24000
+  enable_stt: true
+  enable_tts: true
+  debug_logging: false
+schema:
+  api_key: password
+  region: list(eu|us|jp)
+  language_hints: str
+  voice: str
+  tts_default_language: str
+  tts_speed: float(0.7,1.3)
+  tts_sample_rate: list(16000|24000|44100|48000)
+  enable_stt: bool
+  enable_tts: bool
+  debug_logging: bool

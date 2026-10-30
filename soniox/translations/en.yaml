@@ -1,0 +1,46 @@
+---
+configuration:
+  api_key:
+    name: Soniox API key
+    description: >-
+      Create it in the Soniox Console (console.soniox.com). For the EU region
+      the key must come from a project created in the EU region.
+  region:
+    name: Region
+    description: >-
+      Where Soniox processes your audio and text. EU keeps it in the European
+      Union, but Soniox enables the EU region on request (sales@soniox.com).
+  language_hints:
+    name: Language hints
+    description: >-
+      Comma-separated language codes you speak, for example "en,el". The
+      language set in your voice assistant is always tried first.
+  voice:
+    name: Default voice
+    description: >-
+      Soniox voice used when the voice assistant does not choose one. Every
+      voice speaks every language.
+  tts_default_language:
+    name: Language for non-Greek text
+    description: >-
+      Text written in Greek letters is spoken as Greek. Other text is spoken in
+      this language.
+  tts_speed:
+    name: Speaking speed
+    description: From 0.7 (slower) to 1.3 (faster). 1.0 is normal.
+  tts_sample_rate:
+    name: Audio sample rate
+    description: Sample rate of the generated speech in Hz.
+  enable_stt:
+    name: Speech-to-text
+    description: Offer Soniox speech-to-text to Home Assistant.
+  enable_tts:
+    name: Text-to-speech
+    description: Offer Soniox text-to-speech to Home Assistant.
+  debug_logging:
+    name: Debug logging
+    description: >-
+      Log every request. This writes what you say and what is spoken to the
+      app log, so turn it off again after troubleshooting.
+network:
+  10500/tcp: Wyoming protocol port (only needed outside Home Assistant)

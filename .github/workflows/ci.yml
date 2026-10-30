@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r soniox/requirements.txt pytest pytest-asyncio
+      - run: python -m pytest -q
+
+  lint-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Home Assistant app (add-on) linter
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: "./soniox"
+      - name: Shellcheck the s6 scripts
+        run: |
+          find soniox/rootfs -type f \( -name run -o -name finish \) \
+            -exec shellcheck --shell=bash {} +
+
+  build-app:
+    # Test build of the app image on the same base images Home Assistant
+    # uses, so a broken Dockerfile shows up here and not on the Pi.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        run: |
+          platform=linux/amd64
+          [ "${{ matrix.arch }}" = aarch64 ] && platform=linux/arm64
+          docker buildx build soniox \
+            --platform "$platform" \
+            --build-arg BUILD_FROM=ghcr.io/home-assistant/${{ matrix.arch }}-base-debian:trixie \
+            --tag soniox-test:${{ matrix.arch }} --load
+      - name: Smoke test (amd64 only)
+        if: matrix.arch == 'amd64'
+        run: |
+          # Start the bridge without the s6/bashio layer and ask it to describe itself.
+          docker run -d --name soniox --entrypoint python3 -p 10500:10500 \
+            -e SONIOX_API_KEY=dummy soniox-test:amd64 \
+            -m wyoming_soniox --uri tcp://0.0.0.0:10500
+          for i in $(seq 1 30); do
+            if echo '{ "type": "describe" }' | nc -w 1 localhost 10500 | grep -q Soniox; then
+              echo "Bridge answered describe"; exit 0
+            fi
+            sleep 1
+          done
+          docker logs soniox; exit 1

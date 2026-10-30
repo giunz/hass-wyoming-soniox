@@ -1,0 +1,11 @@
+# For running outside Home Assistant OS (Docker, Proxmox, a NAS...).
+#   docker build -f Dockerfile.standalone -t wyoming-soniox soniox
+FROM python:3.13-slim
+
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY wyoming_soniox ./wyoming_soniox
+
+EXPOSE 10500
+ENTRYPOINT ["python", "-m", "wyoming_soniox", "--uri", "tcp://0.0.0.0:10500"]
