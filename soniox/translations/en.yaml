@@ -37,10 +37,22 @@ configuration:
   enable_tts:
     name: Text-to-speech
     description: Offer Soniox text-to-speech to Home Assistant.
-  debug_logging:
-    name: Debug logging
+  allowed_clients:
+    name: Allowed client addresses
     description: >-
-      Log every request. This writes what you say and what is spoken to the
-      app log, so turn it off again after troubleshooting.
+      Comma-separated IP addresses or networks allowed to connect, for example
+      "192.168.1.20, 192.168.1.0/24". Leave empty to allow home and local
+      networks only (192.168.x.x, 10.x.x.x, 172.16-31.x.x), which includes
+      Home Assistant itself. If you fill it in, only these are allowed (plus
+      this machine), so include Home Assistant's address, usually
+      172.30.32.0/23. Connections from other addresses are refused. The log
+      shows the address of each client that connects.
+  log_level:
+    name: Log level
+    description: >-
+      normal: startup, errors, and the address of each new client (once).
+      connections: also logs every connection with its address.
+      debug: logs every request, including what you say and what is spoken,
+      so turn it off again after troubleshooting.
 network:
   10500/tcp: Wyoming protocol port (only needed outside Home Assistant)

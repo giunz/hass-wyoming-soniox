@@ -68,6 +68,12 @@ class SonioxEventHandler(AsyncEventHandler):
         self._stream_cap_logged = False
         self._audio_started = False
 
+    async def run(self) -> None:
+        if not self._limits.access.admit(self.writer.get_extra_info("peername")):
+            self.writer.close()
+            return
+        await super().run()
+
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
             await self.write_event(self._info_event)

@@ -1,5 +1,5 @@
 ---
-version: 0.1.3
+version: 0.1.4
 slug: soniox_speech
 name: Soniox Speech
 description: Cloud speech-to-text and text-to-speech from Soniox for Assist
@@ -22,7 +22,8 @@ options:
   tts_sample_rate: 24000
   enable_stt: true
   enable_tts: true
-  debug_logging: false
+  allowed_clients: ""
+  log_level: normal
 schema:
   api_key: password
   region: list(eu|us|jp)
@@ -33,4 +34,5 @@ schema:
   tts_sample_rate: list(16000|24000|44100|48000)
   enable_stt: bool
   enable_tts: bool
-  debug_logging: bool
+  allowed_clients: str?
+  log_level: list(normal|connections|debug)

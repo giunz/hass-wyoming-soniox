@@ -18,8 +18,14 @@ if bashio::config.false 'enable_tts'; then
     flags+=('--no-tts')
 fi
 
-if bashio::config.true 'debug_logging'; then
-    flags+=('--debug')
+case "$(bashio::config 'log_level')" in
+    debug) flags+=('--debug') ;;
+    connections) flags+=('--log-connections') ;;
+esac
+
+# Empty means: home and local networks only.
+if bashio::config.has_value 'allowed_clients'; then
+    flags+=('--allowed-clients' "$(bashio::config 'allowed_clients')")
 fi
 
 # The key goes through the environment, not the command line, so it does not
@@ -29,7 +35,6 @@ SONIOX_API_KEY="$(bashio::config 'api_key')"
 
 readonly STARTUP_TIMEOUT=10
 
-# shellcheck disable=SC2068
 python3 -m wyoming_soniox \
     --uri 'tcp://0.0.0.0:10500' \
     --region "$(bashio::config 'region')" \
@@ -37,7 +42,7 @@ python3 -m wyoming_soniox \
     --voice "$(bashio::config 'voice')" \
     --tts-default-language "$(bashio::config 'tts_default_language')" \
     --tts-speed "$(bashio::config 'tts_speed')" \
-    --tts-sample-rate "$(bashio::config 'tts_sample_rate')" ${flags[@]} &
+    --tts-sample-rate "$(bashio::config 'tts_sample_rate')" "${flags[@]}" &
 child=$!
 
 # Pass a stop request from s6 on to the bridge.

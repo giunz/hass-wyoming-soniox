@@ -60,6 +60,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--max-stt-sessions", type=int, default=4, help="Simultaneous speech-to-text requests (default 4)")
     parser.add_argument("--max-tts-requests", type=int, default=4, help="Simultaneous requests to Soniox text-to-speech (default 4)")
     parser.add_argument("--tts-max-chars", type=int, default=8000, help="Characters spoken per message; the rest is dropped (default 8000)")
+    parser.add_argument("--allowed-clients", type=_csv, default=[], help="Comma-separated IPs or networks allowed to connect, e.g. 192.168.1.0/24. Default: home and local networks")
+    parser.add_argument("--log-connections", action="store_true", help="Log every connection with its address (default: only new addresses)")
     parser.add_argument("--stt-url", help=argparse.SUPPRESS)
     parser.add_argument("--tts-url", help=argparse.SUPPRESS)
     parser.add_argument("--api-url", help=argparse.SUPPRESS)
@@ -179,8 +181,10 @@ async def main(argv=None) -> None:
             "on" if settings.stt_enabled else "off",
             "on" if settings.tts_enabled else "off",
         )
+        limits = Limits(settings)
+        _LOGGER.info("Accepting connections from: %s", limits.access.describe())
         server = AsyncServer.from_uri(args.uri)
-        await server.run(partial(SonioxEventHandler, info, settings, http, Limits(settings)))
+        await server.run(partial(SonioxEventHandler, info, settings, http, limits))
 
 
 def _make_settings(args: argparse.Namespace) -> Settings:
@@ -196,6 +200,8 @@ def _make_settings(args: argparse.Namespace) -> Settings:
         tts_speed=args.tts_speed,
         stt_enabled=not args.no_stt,
         tts_enabled=not args.no_tts,
+        allowed_clients=args.allowed_clients,
+        log_connections=args.log_connections or args.debug,
         stt_max_seconds=args.stt_max_seconds,
         max_stt_sessions=args.max_stt_sessions,
         max_tts_requests=args.max_tts_requests,

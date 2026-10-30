@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.4
+
+- New setting **Allowed client addresses**: which IP addresses or networks may
+  connect. Empty means home and local networks only, so public internet
+  addresses are refused. This machine is always allowed.
+- The log now shows the address of each new client (once), and warns about
+  refused connections (at most every 10 minutes per address).
+- **Log level** (normal, connections, debug) replaces the **Debug logging**
+  switch. If you had Debug logging on, set Log level to `debug`.
+- The run script passes settings containing spaces correctly.
+
 ## 0.1.3
 
 Security hardening.

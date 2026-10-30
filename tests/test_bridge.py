@@ -501,3 +501,32 @@ async def test_unencrypted_soniox_url_is_refused(mock):
     assert proc.returncode != 0
     assert "must start with https://" in out
     assert "secret-key-123" not in out
+
+
+@pytest.mark.asyncio
+async def test_allowed_clients_setting_is_applied_and_this_machine_still_works(mock):
+    proc, port = await _start_bridge(mock, GOOD_KEY, "--allowed-clients", "203.0.113.0/24, 198.51.100.7")
+    try:
+        async with AsyncTcpClient("127.0.0.1", port) as client:
+            await client.write_event(Describe().event())
+            event = await asyncio.wait_for(client.read_event(), 5)
+        assert event.type == "info"
+    finally:
+        out = await _stop(proc)
+    assert "Accepting connections from: 203.0.113.0/24, 198.51.100.7/32 (from the setting" in out
+    assert "Connection from 127.0.0.1" in out  # --debug shows this machine too
+
+
+@pytest.mark.asyncio
+async def test_bad_allowed_clients_value_stops_startup(mock):
+    port = _free_port()
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "wyoming_soniox",
+        "--uri", f"tcp://127.0.0.1:{port}", "--api-key", "k",
+        "--allowed-clients", "192.168.1.0/24, 192.168.1.x",
+        env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out = (await asyncio.wait_for(proc.communicate(), 10))[0].decode()
+    assert proc.returncode != 0
+    assert "192.168.1.x" in out

@@ -63,6 +63,10 @@ picks Greek for text in Greek letters and the configured default otherwise.
   and is never logged. `--api-key` works too but shows in the process list.
 - Connections to Soniox must be encrypted (`wss://`, `https://`); plain
   `ws://` and `http://` are accepted only for `localhost`, for tests.
+- `--allowed-clients 192.168.1.0/24,10.0.0.5` limits who may connect. Without
+  it, only home and local networks are accepted (public addresses are
+  refused). This machine is always allowed. Client addresses are logged once
+  when first seen; `--log-connections` logs every connection.
 - Limits per request: `--stt-max-seconds` (60), `--max-stt-sessions` (4),
   `--max-tts-requests` (4), `--tts-max-chars` (8000).
 - The Docker image runs as a non-root user.

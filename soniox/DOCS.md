@@ -40,7 +40,8 @@ cloud, so this app works on a Raspberry Pi or Home Assistant Green.
 According to Soniox's documentation, real-time audio and transcripts are not
 stored and are never used for training; logs contain only metadata. With the
 EU region, audio and text stay in the EU. This app does not store anything.
-**Debug logging** writes your words to the app log, so leave it off normally.
+Log level **debug** writes your words to the app log, so leave it on
+**normal** except while troubleshooting.
 
 ## Security
 
@@ -48,6 +49,20 @@ The Wyoming protocol has no login, so anyone who can connect to port 10500
 can use your Soniox account. The app does not publish that port outside Home
 Assistant, which is the safe default: leave the port field empty in the app's
 network settings unless you need it, and never expose it to the internet.
+
+**Allowed client addresses** limits who may connect. Left empty, the app
+accepts home and local networks only (`192.168.x.x`, `10.x.x.x`,
+`172.16-31.x.x`, which includes Home Assistant itself) and refuses public
+internet addresses. To restrict it further, list the addresses or networks
+that may connect, separated by commas, for example
+`192.168.1.20, 192.168.1.0/24`. When the list is filled in, only those are
+allowed (plus the machine the app runs on), so also include Home Assistant,
+usually `172.30.32.0/23`.
+
+To find out which addresses your devices use, look in the log: each client
+address is logged once, the first time it connects (`New client address:
+192.168.1.20`), and refused ones are logged as warnings. Set **Log level** to
+`connections` to log every connection with its address.
 
 To protect memory and your account from a client that misbehaves, the app
 accepts at most 60 seconds of audio per request, 4 simultaneous
@@ -65,5 +80,5 @@ a few seconds each. Check [soniox.com/pricing](https://soniox.com/pricing).
 - `Incorrect API key provided` with region `eu`: the key is not from an EU
   project (see above).
 - `Organization balance exhausted`: add credit in the Soniox Console.
-- Assist says it did not understand: turn on **Debug logging** and look at
+- Assist says it did not understand: set **Log level** to `debug` and look at
   the `Transcript:` lines in the log.

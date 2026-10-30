@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from urllib.parse import urlsplit
 
+from .access import ClientAccess, parse_networks
+
 # Regional API domains, from https://soniox.com/docs/data-residency
 REGION_DOMAINS = {
     "us": "soniox.com",
@@ -77,6 +79,9 @@ class Settings:
     max_tts_requests: int = 4  # simultaneous requests to Soniox TTS
     tts_max_chars: int = 8000  # text spoken per message; the rest is dropped
     stt_idle_slack: float = 10.0  # extra seconds before an unfinished session is closed
+    # Network addresses allowed to connect; empty means home and local networks.
+    allowed_clients: List[str] = field(default_factory=list)
+    log_connections: bool = False  # log every connection, not just new addresses
     # Endpoint overrides (normally derived from region; used for tests).
     stt_url: Optional[str] = None
     tts_url: Optional[str] = None
@@ -94,6 +99,7 @@ class Settings:
         _require_tls("STT", self.stt_url, "wss", "ws")
         _require_tls("TTS", self.tts_url, "https", "http")
         _require_tls("API", self.api_url, "https", "http")
+        parse_networks(self.allowed_clients)  # fail early on a typo
 
     @property
     def auth_headers(self) -> dict:
@@ -101,12 +107,13 @@ class Settings:
 
 
 class Limits:
-    """Counters shared by all connections (one instance per server)."""
+    """Limits and client checks shared by all connections (one per server)."""
 
     def __init__(self, settings: Settings) -> None:
         self._max_stt = settings.max_stt_sessions
         self._stt_active = 0
         self.tts = asyncio.Semaphore(settings.max_tts_requests)
+        self.access = ClientAccess(settings.allowed_clients, settings.log_connections)
 
     def acquire_stt(self) -> bool:
         """Take a speech-to-text slot; False if all slots are in use."""
