@@ -196,7 +196,9 @@ async def synthesize(
 async def fetch_voices(http: aiohttp.ClientSession, settings: Settings) -> List[dict]:
     """Return [{id, description, gender}] for the configured TTS model."""
     url = f"{settings.api_url}/v1/tts-models"
-    timeout = aiohttp.ClientTimeout(total=10)
+    # Kept short: the server only starts listening after this call, and the
+    # add-on gives the bridge 10 seconds to come up.
+    timeout = aiohttp.ClientTimeout(total=5)
     async with http.get(url, headers=settings.auth_headers, timeout=timeout) as resp:
         if resp.status != 200:
             raise SonioxError(f"Listing voices failed: HTTP {resp.status}")

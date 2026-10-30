@@ -5,8 +5,9 @@
 # ==============================================================================
 flags=()
 
-if ! bashio::config.has_value 'api_key'; then
-    bashio::exit.nok "Set your Soniox API key in the app configuration first."
+# An empty key counts as not set. Exiting non-zero makes s6 stop the container.
+if ! bashio::config.has_value 'api_key' || [ -z "$(bashio::config 'api_key')" ]; then
+    bashio::exit.nok "Set your Soniox API key in the app configuration first. Not starting."
 fi
 
 if bashio::config.false 'enable_stt'; then
@@ -26,12 +27,45 @@ fi
 export SONIOX_API_KEY
 SONIOX_API_KEY="$(bashio::config 'api_key')"
 
+readonly STARTUP_TIMEOUT=10
+
 # shellcheck disable=SC2068
-exec python3 -m wyoming_soniox \
+python3 -m wyoming_soniox \
     --uri 'tcp://0.0.0.0:10500' \
     --region "$(bashio::config 'region')" \
     --language-hints "$(bashio::config 'language_hints')" \
     --voice "$(bashio::config 'voice')" \
     --tts-default-language "$(bashio::config 'tts_default_language')" \
     --tts-speed "$(bashio::config 'tts_speed')" \
-    --tts-sample-rate "$(bashio::config 'tts_sample_rate')" ${flags[@]}
+    --tts-sample-rate "$(bashio::config 'tts_sample_rate')" ${flags[@]} &
+child=$!
+
+# Pass a stop request from s6 on to the bridge.
+trap 'kill -TERM "${child}" 2>/dev/null' TERM INT
+
+# Wait until the bridge accepts connections, or give up after STARTUP_TIMEOUT.
+ready=false
+for _ in $(seq 1 $((STARTUP_TIMEOUT * 2))); do
+    if (exec 3<>/dev/tcp/127.0.0.1/10500) 2>/dev/null; then
+        ready=true
+        break
+    fi
+    # The bridge exited on its own (for example, a bad option): stop now.
+    kill -0 "${child}" 2>/dev/null || break
+    sleep 0.5
+done
+
+if [ "${ready}" != true ]; then
+    if kill -0 "${child}" 2>/dev/null; then
+        bashio::log.error "Soniox bridge did not start within ${STARTUP_TIMEOUT} seconds. Stopping the app."
+        kill -TERM "${child}" 2>/dev/null
+    else
+        bashio::log.error "Soniox bridge exited during startup. See the messages above."
+    fi
+    wait "${child}" 2>/dev/null
+    bashio::exit.nok "Startup failed."
+fi
+
+bashio::log.info "Soniox bridge is listening on port 10500."
+wait "${child}"
+exit $?

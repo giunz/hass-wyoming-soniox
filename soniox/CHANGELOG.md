@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- The app does not start when the API key is empty; it logs an error and stops.
+- If the bridge is not listening within 10 seconds, the app stops and the
+  container exits, so Home Assistant shows it as failed.
+- The voice list request times out after 5 seconds (was 10), so startup stays
+  inside the 10-second limit. The built-in voice list is used if it times out.
+
 ## 0.1.1
 
 - Markdown in replies (from AI conversation agents) is no longer read aloud:
